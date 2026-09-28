@@ -22,6 +22,7 @@ from django.db import transaction
 from routes.models import FuelStation
 from routes.services.geocoding import DATA_DIR, US_STATES, get_gazetteer
 from routes.services.ors_client import ORSClient, ORSError, ORSRateLimitError
+from routes.services.stations import get_station_index
 
 DEFAULT_CSV = Path(settings.BASE_DIR) / 'fuel-prices-for-be-assessment.csv'
 GEOCODE_CACHE_PATH = DATA_DIR / 'geocode_cache.json'
@@ -49,6 +50,7 @@ class Command(BaseCommand):
                                'latitude', 'longitude', 'geocode_source'],
                 batch_size=1000,
             )
+        get_station_index.cache_clear()
 
         geocoded = sum(1 for s in stations.values() if coords.get((s['state'], s['city'])))
         self.stdout.write(self.style.SUCCESS(

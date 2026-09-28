@@ -120,43 +120,77 @@ def test_stations_at_same_location_keep_only_the_cheapest():
     assert refs(plan) == ['cheap']
 
 
-def test_small_purchase_is_folded_into_previous_stop():
-    # B is cheaper than A, and C is 2 cents cheaper than B just 2 miles on:
-    # the pure optimum stops at B for 0.2 gal only to reach C.
-    stations = [Candidate(0, 3.40, 'A'), Candidate(10, 3.08, 'B'), Candidate(12, 3.06, 'C')]
-    pure = plan_fuel_stops(stations, 300, RANGE, MPG)
-    assert refs(pure) == ['A', 'B', 'C']
-    assert pure[1].gallons == pytest.approx(0.2)
-
-    merged = plan_fuel_stops(stations, 300, RANGE, MPG, min_purchase_gallons=5)
-    assert refs(merged) == ['A', 'C']
-    assert merged[0].gallons == pytest.approx(1.2)
-    assert total_gallons(merged) == pytest.approx(total_gallons(pure))
-    assert total_cost(merged) - total_cost(pure) == pytest.approx(0.2 * (3.40 - 3.08))
+def test_stop_penalty_skips_marginal_top_ups():
+    # B is 1 cent cheaper than A just 10 miles on: the pure optimum makes an extra stop to save 30 cents.
+    stations = [Candidate(0, 3.10, 'A'), Candidate(10, 3.09, 'B')]
+    assert refs(plan_fuel_stops(stations, 400, RANGE, MPG)) == ['A', 'B']
+    assert refs(plan_fuel_stops(stations, 400, RANGE, MPG, stop_penalty=5)) == ['A']
 
 
-def test_small_purchase_kept_when_previous_tank_is_full():
-    # A fills the tank (cheapest in range); C's small top-up cannot move back to A.
-    stations = [Candidate(0, 3.0, 'A'), Candidate(480, 3.5, 'C')]
-    plan = plan_fuel_stops(stations, 510, RANGE, MPG, min_purchase_gallons=5)
-    assert refs(plan) == ['A', 'C']
-    assert plan[1].gallons == pytest.approx(1)
+def test_stop_penalty_still_pays_for_big_savings():
+    stations = [Candidate(0, 4.00, 'A'), Candidate(10, 3.00, 'B')]
+    assert refs(plan_fuel_stops(stations, 400, RANGE, MPG, stop_penalty=5)) == ['A', 'B']
+
+
+def brute_force_cost(stations, total, start_fuel, penalty):
+    """min over every subset of stops of (LP fuel cost using only those stops) + penalty * stops."""
+    best = None
+    n = len(stations)
+    for mask in range(1 << n):
+        chosen = [stations[i] for i in range(n) if mask >> i & 1]
+        if start_fuel == 0:
+            if not mask & 1:
+                continue  # empty start: the first station is always a stop
+            prepaid = chosen[0].mile / MPG
+            if chosen[0].mile > RANGE:
+                continue
+            fuel_cost = lp_optimal_cost(chosen, total, prepaid)
+            fuel_cost = None if fuel_cost is None else fuel_cost + prepaid * chosen[0].price
+        else:
+            fuel_cost = lp_optimal_cost(chosen, total, start_fuel) if chosen else (
+                0.0 if total <= start_fuel * MPG else None)
+        if fuel_cost is not None:
+            cost = fuel_cost + penalty * len(chosen)
+            best = cost if best is None else min(best, cost)
+    return best
+
+
+@pytest.mark.parametrize('seed', range(150))
+def test_stop_penalty_plan_matches_brute_force(seed):
+    rng = random.Random(1000 + seed)
+    total = rng.uniform(300, 1600)
+    stations = sorted(
+        {round(rng.uniform(0, total), 1): Candidate(0, 0) for _ in range(rng.randint(1, 8))}.keys()
+    )
+    stations = [Candidate(m, round(rng.uniform(2.7, 4.5), 3)) for m in stations]
+    start_fuel = rng.choice([0.0, rng.uniform(0, CAPACITY)])
+    penalty = rng.choice([0.0, 2.0, 10.0, 40.0])
+    expected = brute_force_cost(stations, total, start_fuel, penalty)
+
+    if expected is None:
+        with pytest.raises(FuelPlanError):
+            plan_fuel_stops(stations, total, RANGE, MPG, start_fuel, stop_penalty=penalty)
+        return
+    plan = plan_fuel_stops(stations, total, RANGE, MPG, start_fuel, stop_penalty=penalty)
+    # A stop that buys nothing is not counted, so the plan can only be as good or better.
+    actual = total_cost(plan) + penalty * len(plan)
+    assert actual == pytest.approx(expected, rel=1e-7, abs=1e-6)
 
 
 @pytest.mark.parametrize('seed', range(100))
-def test_merging_keeps_plan_feasible(seed):
+def test_plans_are_physically_feasible(seed):
     rng = random.Random(seed)
     total = rng.uniform(300, 3000)
     stations = [Candidate(rng.uniform(0, total), round(rng.uniform(2.7, 4.5), 3)) for _ in range(60)]
     stations.append(Candidate(0, 3.5))
     try:
-        plan = plan_fuel_stops(stations, total, RANGE, MPG, min_purchase_gallons=5)
+        plan = plan_fuel_stops(stations, total, RANGE, MPG, stop_penalty=rng.choice([0, 5, 20]))
     except FuelPlanError:
         return
-    level, mile = 0.0, 0.0
+    level, mile = -plan[0].candidate.mile / MPG, 0.0  # empty start: fuel to reach stop 1 is prepaid there
     for p in plan:
         level -= (p.candidate.mile - mile) / MPG
-        assert level >= -(p.candidate.mile / MPG if mile == 0 else 1e-6)  # empty start is prepaid at stop 1
+        assert level >= -1e-6
         level += p.gallons
         assert level <= CAPACITY + 1e-6
         mile = p.candidate.mile

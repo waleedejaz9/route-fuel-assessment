@@ -1,21 +1,31 @@
-"""Cheapest refueling plan along a fixed route (the "gas station problem").
+"""Cheapest refueling plan along a fixed route.
 
-Greedy strategy, optimal when fuel cost is linear in gallons:
-  * At a station, if a cheaper station (or the destination) is within range,
-    buy just enough fuel to reach the first such one.
-  * Otherwise fill the tank and drive to the cheapest station within range.
+Minimises   total fuel cost + stop_penalty * number_of_stops
+for a vehicle with a fixed tank (range_miles / mpg gallons).
 
-Stations are visited in mile-marker order, so this runs in O(n * k) where k is
-the number of stations within one tank's range.
+Why a stop penalty: the pure cost optimum happily stops to buy 1 gallon at a
+station 1 cent cheaper. A small per-stop cost (driver time) removes those
+stops while barely changing fuel spend. With stop_penalty=0 this returns the
+exact minimum-cost plan.
 
-Optionally, purchases smaller than `min_purchase_gallons` are then folded into
-the previous stop (when the tank has room), trading a few cents for not
-stopping to buy a gallon at a marginally cheaper station.
+Algorithm: dynamic programming over stops. In an optimal plan every stop
+either fills the tank or buys just enough to reach the next stop (Khuller,
+Malekian & Mestre, "To fill or not to fill: the gas station problem"). So the
+fuel on arrival at a stop is either 0 or "full tank minus the distance from the
+previous stop", giving O(n * k) states, where k is the number of stations
+within one tank's range.
+
+For each station v we keep its arrival states (fuel g, cost c). Because fuel
+can be topped up at v's price p, a state's value when buying at v is
+c - g * p; a prefix minimum over states sorted by g answers "cheapest state
+that arrives with at most L gallons" for every next stop in O(log k).
 """
 from bisect import bisect_right
 from dataclasses import dataclass
+from itertools import accumulate
 
 EPSILON = 1e-9
+INF = float('inf')
 
 
 class FuelPlanError(Exception):
@@ -40,13 +50,19 @@ class Purchase:
         return self.gallons * self.candidate.price
 
 
-def plan_fuel_stops(candidates, total_miles, range_miles, mpg, start_fuel_gallons=0.0, min_purchase_gallons=0.0):
-    """Return the list of Purchases minimising total fuel cost.
+@dataclass
+class _State:
+    fuel: float        # gallons on arrival
+    cost: float        # total cost so far (fuel + penalties), excluding purchases here
+    parent: tuple      # (station, state index, tank level after buying there) or None for the origin
 
-    If the tank starts empty (start_fuel_gallons == 0), the vehicle starts with
-    just enough fuel to reach the first station on the route, and that fuel is
-    charged at the first station's price, so total gallons always equals
-    total_miles / mpg.
+
+def plan_fuel_stops(candidates, total_miles, range_miles, mpg, start_fuel_gallons=0.0, stop_penalty=0.0):
+    """Return the list of Purchases, in route order, for the cheapest plan.
+
+    If the tank starts empty (start_fuel_gallons == 0), the vehicle begins by
+    fueling at the first station on the route; the fuel needed to get there is
+    charged at that station's price, so total gallons equals total_miles / mpg.
     """
     if total_miles <= 0:
         return []
@@ -55,57 +71,76 @@ def plan_fuel_stops(candidates, total_miles, range_miles, mpg, start_fuel_gallon
         raise FuelPlanError(f'Starting fuel must be between 0 and {capacity:g} gallons.')
 
     stations = _cheapest_per_location(c for c in candidates if 0 <= c.mile < total_miles)
-    # The destination acts as a station cheaper than any other: we always want to arrive empty.
-    destination = len(stations)
-    stations.append(Candidate(mile=total_miles, price=float('-inf')))
     miles = [s.mile for s in stations]
-    purchases = {}  # station index -> gallons; merges repeated buys at the same station
+    states = [[] for _ in stations]
+    best_final, final_parent = INF, None
 
-    def buy(i, gallons):
-        if gallons > EPSILON:
-            purchases[i] = purchases.get(i, 0.0) + gallons
-
-    fuel = start_fuel_gallons
-    if fuel == 0:
-        if stations[0].mile > range_miles or destination == 0:
+    # Origin.
+    if start_fuel_gallons == 0:
+        if not stations or miles[0] > range_miles + EPSILON:
             raise FuelPlanError(f'No fuel station within {range_miles:g} miles of the start.')
-        buy(0, stations[0].mile / mpg)
-        current = 0
+        prepaid = miles[0] / mpg
+        states[0].append(_State(0.0, prepaid * stations[0].price, None))
     else:
-        current = None  # at the origin, where fuel cannot be bought
+        reach = start_fuel_gallons * mpg
+        if total_miles <= reach + EPSILON:
+            best_final = 0.0
+        for w in range(bisect_right(miles, reach + EPSILON)):
+            states[w].append(_State(start_fuel_gallons - miles[w] / mpg, 0.0, None))
 
-    while current != destination:
-        here_mile = 0.0 if current is None else stations[current].mile
-        here_price = float('inf') if current is None else stations[current].price
-        reach = here_mile + (fuel * mpg if current is None else range_miles)
-        first = 0 if current is None else current + 1
-        reachable = range(first, bisect_right(miles, reach + EPSILON))
-        if not reachable:
-            raise FuelPlanError(
-                f'No fuel station within {range_miles:g} miles after mile {here_mile:.0f}; '
-                'the trip cannot be completed with this vehicle range.'
-            )
+    # Forward pass in route order: all arrivals at v are known before v is processed.
+    for v, station in enumerate(stations):
+        arrivals = states[v]
+        if not arrivals:
+            continue
+        price = station.price
+        order = sorted(range(len(arrivals)), key=lambda i: arrivals[i].fuel)
+        fuels = [arrivals[i].fuel for i in order]
+        # prefix_best[k] = (min of cost - fuel*price over the k+1 lowest-fuel states, state index)
+        prefix_best = list(accumulate(
+            ((arrivals[i].cost - arrivals[i].fuel * price, i) for i in order), min,
+        ))
 
-        cheaper = next((j for j in reachable if stations[j].price < here_price), None)
-        if cheaper is not None:
-            # Buy just enough to reach the next cheaper station (or the destination).
-            target = cheaper
-            needed = (stations[target].mile - here_mile) / mpg
-            if current is not None:
-                buy(current, needed - fuel)
-                fuel = max(fuel, needed)
-        else:
-            # Nothing cheaper in range: fill up here, then go to the cheapest reachable station.
-            target = min(reachable, key=lambda j: (stations[j].price, -stations[j].mile))
-            buy(current, capacity - fuel)
-            fuel = capacity
-        fuel -= (stations[target].mile - here_mile) / mpg
-        current = target
+        def cheapest_arrival_with_at_most(gallons):
+            k = bisect_right(fuels, gallons + EPSILON) - 1
+            return prefix_best[k] if k >= 0 else None
 
-    plan = [Purchase(stations[i], gallons) for i, gallons in sorted(purchases.items())]
-    if min_purchase_gallons > 0:
-        plan = _merge_small_purchases(plan, min_purchase_gallons, capacity, mpg, start_fuel_gallons)
-    return plan
+        fill_base, fill_state = prefix_best[-1]
+        fill_cost = fill_base + capacity * price + stop_penalty
+
+        for w in range(v + 1, bisect_right(miles, miles[v] + range_miles + EPSILON)):
+            leg = (miles[w] - miles[v]) / mpg
+            # Option 1: fill the tank at v.
+            states[w].append(_State(capacity - leg, fill_cost, (v, fill_state, capacity)))
+            # Option 2: buy just enough at v to reach w empty.
+            best = cheapest_arrival_with_at_most(leg)
+            if best:
+                states[w].append(_State(0.0, best[0] + leg * price + stop_penalty, (v, best[1], leg)))
+
+        leg = (total_miles - miles[v]) / mpg
+        if leg <= capacity + EPSILON:
+            best = cheapest_arrival_with_at_most(leg)
+            if best and best[0] + leg * price + stop_penalty < best_final:
+                best_final = best[0] + leg * price + stop_penalty
+                final_parent = (v, best[1], leg)
+
+    if best_final == INF:
+        raise FuelPlanError(_explain_infeasible(miles, total_miles, range_miles))
+    return _reconstruct(stations, states, final_parent, start_fuel_gallons, mpg)
+
+
+def _reconstruct(stations, states, parent, start_fuel_gallons, mpg):
+    purchases = []
+    while parent is not None:
+        v, state_index, level_after = parent
+        state = states[v][state_index]
+        gallons = level_after - state.fuel
+        if state.parent is None and start_fuel_gallons == 0:
+            gallons += stations[v].mile / mpg   # prepaid fuel to reach the first station
+        if gallons > EPSILON:
+            purchases.append(Purchase(stations[v], gallons))
+        parent = state.parent
+    return purchases[::-1]
 
 
 def _cheapest_per_location(candidates):
@@ -117,29 +152,10 @@ def _cheapest_per_location(candidates):
     return kept
 
 
-def _merge_small_purchases(plan, min_gallons, capacity, mpg, start_fuel):
-    """Fold purchases below `min_gallons` into the previous stop when the tank has room.
-
-    Buying g gallons earlier raises the tank level only between the two stops,
-    so the move is feasible iff the level after the earlier purchase stays <= capacity.
-    """
-    plan = list(plan)
-    k = 1
-    while k < len(plan):
-        if plan[k].gallons < min_gallons:
-            prev = plan[k - 1]
-            if _level_after_purchase(plan, k - 1, mpg, start_fuel) + plan[k].gallons <= capacity + EPSILON:
-                plan[k - 1] = Purchase(prev.candidate, prev.gallons + plan[k].gallons)
-                del plan[k]
-                continue
-        k += 1
-    return plan
-
-
-def _level_after_purchase(plan, index, mpg, start_fuel):
-    """Tank level right after buying at plan[index] (an empty start's prepaid fuel is in plan[0])."""
-    level, mile = start_fuel, 0.0
-    for purchase in plan[:index + 1]:
-        level += purchase.gallons - (purchase.candidate.mile - mile) / mpg
-        mile = purchase.candidate.mile
-    return level
+def _explain_infeasible(miles, total_miles, range_miles):
+    points = [0.0, *miles, total_miles]
+    for here, there in zip(points, points[1:]):
+        if there - here > range_miles + EPSILON:
+            return (f'No fuel station within {range_miles:g} miles after mile {here:.0f}; '
+                    'the trip cannot be completed with this vehicle range.')
+    return 'The starting fuel is not enough to reach the first fuel station.'
