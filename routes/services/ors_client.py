@@ -42,6 +42,18 @@ class ORSClient:
             raise ORSError(f'OpenRouteService returned HTTP {response.status_code}.')
         return response.json()
 
+    def directions(self, points, profile='driving-car'):
+        """Return the GeoJSON route feature through points [(lat, lng), ...], distances in miles."""
+        data = self._request('POST', f'/v2/directions/{profile}/geojson', json={
+            'coordinates': [[lng, lat] for lat, lng in points],
+            'units': 'mi',
+            'instructions': False,
+        })
+        features = data.get('features') or []
+        if not features:
+            raise ORSError('OpenRouteService found no route between these locations.')
+        return features[0]
+
     def geocode_us_locality(self, city, state):
         """Return (lat, lng) for a US city/state, or None if no confident match in that state."""
         data = self._request('GET', '/geocode/search', params={

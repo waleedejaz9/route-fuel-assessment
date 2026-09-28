@@ -157,3 +157,5 @@ VEHICLE_RANGE_MILES = 500
 VEHICLE_MPG = 10
 # Max distance a station may be from the route to be considered a fuel stop.
 STATION_MAX_DETOUR_MILES = 5
+# Purchases smaller than this are folded into the previous stop when possible.
+MIN_FUEL_PURCHASE_GALLONS = 5
