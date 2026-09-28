@@ -57,12 +57,15 @@ class _State:
     parent: tuple      # (station, state index, tank level after buying there) or None for the origin
 
 
-def plan_fuel_stops(candidates, total_miles, range_miles, mpg, start_fuel_gallons=0.0, stop_penalty=0.0):
+def plan_fuel_stops(candidates, total_miles, range_miles, mpg, start_fuel_gallons=0.0, stop_penalty=0.0,
+                    first_stop_max_miles=25.0):
     """Return the list of Purchases, in route order, for the cheapest plan.
 
-    If the tank starts empty (start_fuel_gallons == 0), the vehicle begins by
-    fueling at the first station on the route; the fuel needed to get there is
-    charged at that station's price, so total gallons equals total_miles / mpg.
+    If the tank starts empty (start_fuel_gallons == 0), the vehicle first fuels
+    at one of the stations within `first_stop_max_miles` of the start (the
+    optimiser picks which), or at the nearest station if none is that close;
+    the fuel needed to get there is charged at that station's price, so total
+    gallons always equals total_miles / mpg.
     """
     if total_miles <= 0:
         return []
@@ -79,8 +82,10 @@ def plan_fuel_stops(candidates, total_miles, range_miles, mpg, start_fuel_gallon
     if start_fuel_gallons == 0:
         if not stations or miles[0] > range_miles + EPSILON:
             raise FuelPlanError(f'No fuel station within {range_miles:g} miles of the start.')
-        prepaid = miles[0] / mpg
-        states[0].append(_State(0.0, prepaid * stations[0].price, None))
+        first_stop_limit = min(max(first_stop_max_miles, miles[0]), range_miles)
+        nearby = range(bisect_right(miles, first_stop_limit + EPSILON))
+        for w in nearby:
+            states[w].append(_State(0.0, miles[w] / mpg * stations[w].price, None))
     else:
         reach = start_fuel_gallons * mpg
         if total_miles <= reach + EPSILON:

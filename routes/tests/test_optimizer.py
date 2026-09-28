@@ -8,6 +8,7 @@ from routes.services.optimizer import Candidate, FuelPlanError, plan_fuel_stops
 
 RANGE, MPG = 500, 10
 CAPACITY = RANGE / MPG
+FIRST_STOP_MAX = 25.0  # optimizer default: with an empty tank, first stop is within 25 miles
 
 
 def total_cost(purchases):
@@ -95,13 +96,18 @@ def test_greedy_matches_linear_programming_optimum(seed):
     )
     start_fuel = rng.choice([0.0, rng.uniform(0, CAPACITY)])
     if start_fuel == 0:
-        # Empty start: the fuel to reach the first station is billed there. Model it for the LP
-        # as starting with that fuel, and add its cost.
-        prepaid = stations[0].mile / MPG
-        expected = lp_optimal_cost(stations, total, prepaid)
-        expected = None if expected is None else expected + prepaid * stations[0].price
-        if stations[0].mile > RANGE:
-            expected = None
+        # Empty start: the first stop is any station within FIRST_STOP_MAX miles; the fuel to reach it
+        # is billed there. Model each choice for the LP as starting there with that fuel, add its cost.
+        expected = None
+        first_stop_limit = min(max(FIRST_STOP_MAX, stations[0].mile), RANGE)
+        for j, first in enumerate(stations):
+            if first.mile > first_stop_limit:
+                break
+            prepaid = first.mile / MPG
+            cost = lp_optimal_cost(stations[j:], total, prepaid)
+            if cost is not None:
+                cost += prepaid * first.price
+                expected = cost if expected is None else min(expected, cost)
     else:
         expected = lp_optimal_cost(stations, total, start_fuel)
 
@@ -120,15 +126,30 @@ def test_stations_at_same_location_keep_only_the_cheapest():
     assert refs(plan) == ['cheap']
 
 
+def test_empty_start_picks_best_station_near_start():
+    # C is cheapest but too far to be the first stop; B beats A within the first 25 miles.
+    stations = [Candidate(0, 3.40, 'A'), Candidate(13, 3.08, 'B'), Candidate(40, 2.50, 'C')]
+    plan = plan_fuel_stops(stations, 300, RANGE, MPG, stop_penalty=10)
+    assert refs(plan)[0] == 'B'
+    assert total_gallons(plan) == pytest.approx(30)
+
+
+def test_empty_start_uses_nearest_station_when_none_is_close():
+    stations = [Candidate(80, 3.40, 'A'), Candidate(120, 3.00, 'B')]
+    plan = plan_fuel_stops(stations, 400, RANGE, MPG, stop_penalty=10)
+    assert refs(plan)[0] == 'A'
+    assert total_gallons(plan) == pytest.approx(40)
+
+
 def test_stop_penalty_skips_marginal_top_ups():
-    # B is 1 cent cheaper than A just 10 miles on: the pure optimum makes an extra stop to save 30 cents.
-    stations = [Candidate(0, 3.10, 'A'), Candidate(10, 3.09, 'B')]
+    # B is 1 cent cheaper than A, 40 miles on: the pure optimum makes an extra stop to save ~40 cents.
+    stations = [Candidate(0, 3.10, 'A'), Candidate(40, 3.09, 'B')]
     assert refs(plan_fuel_stops(stations, 400, RANGE, MPG)) == ['A', 'B']
     assert refs(plan_fuel_stops(stations, 400, RANGE, MPG, stop_penalty=5)) == ['A']
 
 
 def test_stop_penalty_still_pays_for_big_savings():
-    stations = [Candidate(0, 4.00, 'A'), Candidate(10, 3.00, 'B')]
+    stations = [Candidate(0, 4.00, 'A'), Candidate(40, 3.00, 'B')]
     assert refs(plan_fuel_stops(stations, 400, RANGE, MPG, stop_penalty=5)) == ['A', 'B']
 
 
@@ -139,11 +160,9 @@ def brute_force_cost(stations, total, start_fuel, penalty):
     for mask in range(1 << n):
         chosen = [stations[i] for i in range(n) if mask >> i & 1]
         if start_fuel == 0:
-            if not mask & 1:
-                continue  # empty start: the first station is always a stop
+            if not chosen or chosen[0].mile > min(max(FIRST_STOP_MAX, stations[0].mile), RANGE):
+                continue  # empty start: the first stop must be near the start
             prepaid = chosen[0].mile / MPG
-            if chosen[0].mile > RANGE:
-                continue
             fuel_cost = lp_optimal_cost(chosen, total, prepaid)
             fuel_cost = None if fuel_cost is None else fuel_cost + prepaid * chosen[0].price
         else:
@@ -187,10 +206,11 @@ def test_plans_are_physically_feasible(seed):
         plan = plan_fuel_stops(stations, total, RANGE, MPG, stop_penalty=rng.choice([0, 5, 20]))
     except FuelPlanError:
         return
-    level, mile = -plan[0].candidate.mile / MPG, 0.0  # empty start: fuel to reach stop 1 is prepaid there
-    for p in plan:
+    level, mile = 0.0, 0.0
+    for number, p in enumerate(plan):
         level -= (p.candidate.mile - mile) / MPG
-        assert level >= -1e-6
+        # Empty start: the fuel to reach the first stop is prepaid there, so only later arrivals are checked.
+        assert number == 0 or level >= -1e-6
         level += p.gallons
         assert level <= CAPACITY + 1e-6
         mile = p.candidate.mile

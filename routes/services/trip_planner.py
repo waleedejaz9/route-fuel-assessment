@@ -119,6 +119,7 @@ def _build_plan(origin, destination, route: Route, start_fuel_gallons, stop_pena
         mpg=settings.VEHICLE_MPG,
         start_fuel_gallons=start_fuel_gallons,
         stop_penalty=stop_penalty,
+        first_stop_max_miles=settings.FIRST_STOP_MAX_MILES,
     )
 
     stops = []

@@ -160,3 +160,6 @@ STATION_MAX_DETOUR_MILES = 5
 # Cost (USD) charged per fuel stop when optimising, e.g. driver time. Prevents
 # stopping to save a few cents; 0 gives the pure minimum-fuel-cost plan.
 FUEL_STOP_PENALTY_USD = 10
+# With an empty tank, the first fuel stop is the best station within this many miles of the
+# start (or the nearest station on the route, if none is that close).
+FIRST_STOP_MAX_MILES = 25

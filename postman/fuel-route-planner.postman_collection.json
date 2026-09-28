@@ -1,0 +1,591 @@
+{
+  "info": {
+    "name": "Fuel Route Planner",
+    "description": "Route between two US locations with the cheapest fuel stops (500 mi range, 10 MPG).\n\nSet `base_url` to your server (default http://127.0.0.1:8000).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000"
+    }
+  ],
+  "item": [
+    {
+      "name": "Plan a trip",
+      "item": [
+        {
+          "name": "Chicago, IL → Denver, CO",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has route and fuel stops', () => { pm.expect(body.route.distance_miles).to.be.above(0); pm.expect(body.fuel_stops).to.be.an('array'); });",
+                  "pm.test('stop costs add up to total', () => pm.expect(body.fuel_stops.reduce((s, x) => s + x.cost, 0)).to.be.closeTo(body.fuel.total_cost, 0.01));",
+                  "pm.test('at most 1 external API call', () => pm.expect(body.meta.external_api_calls).to.be.at.most(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "City, ST input is resolved offline, so the only external call is the route.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=Chicago, IL&finish=Denver, CO",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Chicago, IL"
+                },
+                {
+                  "key": "finish",
+                  "value": "Denver, CO"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Chicago → Denver again (cached)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has route and fuel stops', () => { pm.expect(body.route.distance_miles).to.be.above(0); pm.expect(body.fuel_stops).to.be.an('array'); });",
+                  "pm.test('stop costs add up to total', () => pm.expect(body.fuel_stops.reduce((s, x) => s + x.cost, 0)).to.be.closeTo(body.fuel.total_cost, 0.01));",
+                  "pm.test('at most 1 external API call', () => pm.expect(body.meta.external_api_calls).to.be.at.most(1));",
+                  "pm.test('served from cache with no API calls', () => { pm.expect(body.meta.cached).to.be.true; pm.expect(body.meta.external_api_calls).to.eql(0); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "Run after the previous request: identical trips are served from cache.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=Chicago, IL&finish=Denver, CO",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Chicago, IL"
+                },
+                {
+                  "key": "finish",
+                  "value": "Denver, CO"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "New York → Los Angeles (coast to coast)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has route and fuel stops', () => { pm.expect(body.route.distance_miles).to.be.above(0); pm.expect(body.fuel_stops).to.be.an('array'); });",
+                  "pm.test('stop costs add up to total', () => pm.expect(body.fuel_stops.reduce((s, x) => s + x.cost, 0)).to.be.closeTo(body.fuel.total_cost, 0.01));",
+                  "pm.test('at most 1 external API call', () => pm.expect(body.meta.external_api_calls).to.be.at.most(1));",
+                  "pm.test('needs several fuel stops', () => pm.expect(body.fuel_stops.length).to.be.at.least(6));",
+                  "pm.test('no leg longer than the 500 mi range', () => { let prev = 0; for (const s of body.fuel_stops) { pm.expect(s.mile_marker - prev).to.be.at.most(500); prev = s.mile_marker; } pm.expect(body.route.distance_miles - prev).to.be.at.most(500); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "Full state names are accepted too.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=New York, NY&finish=Los Angeles, California",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "New York, NY"
+                },
+                {
+                  "key": "finish",
+                  "value": "Los Angeles, California"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cheapest fuel only (stop_penalty=0)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has route and fuel stops', () => { pm.expect(body.route.distance_miles).to.be.above(0); pm.expect(body.fuel_stops).to.be.an('array'); });",
+                  "pm.test('stop costs add up to total', () => pm.expect(body.fuel_stops.reduce((s, x) => s + x.cost, 0)).to.be.closeTo(body.fuel.total_cost, 0.01));",
+                  "pm.test('at most 1 external API call', () => pm.expect(body.meta.external_api_calls).to.be.at.most(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "Pure minimum fuel cost: more stops, slightly cheaper. The route itself comes from cache.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=New York, NY&finish=Los Angeles, CA&stop_penalty=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "New York, NY"
+                },
+                {
+                  "key": "finish",
+                  "value": "Los Angeles, CA"
+                },
+                {
+                  "key": "stop_penalty",
+                  "value": "0"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Coordinates input (Houston → Dallas)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has route and fuel stops', () => { pm.expect(body.route.distance_miles).to.be.above(0); pm.expect(body.fuel_stops).to.be.an('array'); });",
+                  "pm.test('stop costs add up to total', () => pm.expect(body.fuel_stops.reduce((s, x) => s + x.cost, 0)).to.be.closeTo(body.fuel.total_cost, 0.01));",
+                  "pm.test('at most 1 external API call', () => pm.expect(body.meta.external_api_calls).to.be.at.most(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=29.7604,-95.3698&finish=Dallas, TX",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "29.7604,-95.3698"
+                },
+                {
+                  "key": "finish",
+                  "value": "Dallas, TX"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Starting with a full tank",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has route and fuel stops', () => { pm.expect(body.route.distance_miles).to.be.above(0); pm.expect(body.fuel_stops).to.be.an('array'); });",
+                  "pm.test('stop costs add up to total', () => pm.expect(body.fuel_stops.reduce((s, x) => s + x.cost, 0)).to.be.closeTo(body.fuel.total_cost, 0.01));",
+                  "pm.test('at most 1 external API call', () => pm.expect(body.meta.external_api_calls).to.be.at.most(1));",
+                  "pm.test('short trip on a full tank buys no fuel', () => pm.expect(body.fuel.total_cost).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=Houston, TX&finish=Dallas, TX&start_fuel=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Houston, TX"
+                },
+                {
+                  "key": "finish",
+                  "value": "Dallas, TX"
+                },
+                {
+                  "key": "start_fuel",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST JSON body",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has route and fuel stops', () => { pm.expect(body.route.distance_miles).to.be.above(0); pm.expect(body.fuel_stops).to.be.an('array'); });",
+                  "pm.test('stop costs add up to total', () => pm.expect(body.fuel_stops.reduce((s, x) => s + x.cost, 0)).to.be.closeTo(body.fuel.total_cost, 0.01));",
+                  "pm.test('at most 1 external API call', () => pm.expect(body.meta.external_api_calls).to.be.at.most(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"Seattle, WA\",\n  \"finish\": \"Miami, FL\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Map (open in browser)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('renders a Leaflet map', () => pm.expect(pm.response.text()).to.include('leaflet'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "HTML page; the JSON response also includes this as map_url.",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/map/?start=New York, NY&finish=Los Angeles, CA",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                "map",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "New York, NY"
+                },
+                {
+                  "key": "finish",
+                  "value": "Los Angeles, CA"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Validation & errors",
+      "item": [
+        {
+          "name": "Missing finish → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('explains the finish problem', () => pm.expect(pm.response.json()).to.have.property('finish'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=Chicago, IL",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Chicago, IL"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Outside the USA (Toronto) → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('explains the finish problem', () => pm.expect(pm.response.json()).to.have.property('finish'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=Chicago, IL&finish=43.65,-79.38",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Chicago, IL"
+                },
+                {
+                  "key": "finish",
+                  "value": "43.65,-79.38"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Not drivable (Honolulu) → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('explains the finish problem', () => pm.expect(pm.response.json()).to.have.property('finish'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=Chicago, IL&finish=Honolulu, HI",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Chicago, IL"
+                },
+                {
+                  "key": "finish",
+                  "value": "Honolulu, HI"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Same start and finish → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('explains the finish problem', () => pm.expect(pm.response.json()).to.have.property('finish'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=Chicago, IL&finish=Chicago, Illinois",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Chicago, IL"
+                },
+                {
+                  "key": "finish",
+                  "value": "Chicago, Illinois"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "start_fuel above tank size → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('explains the start_fuel problem', () => pm.expect(pm.response.json()).to.have.property('start_fuel'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "description": "",
+            "url": {
+              "raw": "{{base_url}}/api/v1/route/?start=Chicago, IL&finish=Denver, CO&start_fuel=60",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "route",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Chicago, IL"
+                },
+                {
+                  "key": "finish",
+                  "value": "Denver, CO"
+                },
+                {
+                  "key": "start_fuel",
+                  "value": "60"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
