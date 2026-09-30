@@ -163,3 +163,8 @@ FUEL_STOP_PENALTY_USD = 10
 # With an empty tank, the first fuel stop is the best station within this many miles of the
 # start (or the nearest station on the route, if none is that close).
 FIRST_STOP_MAX_MILES = 25
+
+# Send only the origin (never paths or query strings) on cross-site requests.
+# OpenStreetMap's tile servers require a Referer, which Django's default
+# 'same-origin' policy would strip from the map page's tile requests.
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
